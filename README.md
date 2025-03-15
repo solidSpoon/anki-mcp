@@ -96,7 +96,7 @@
   "servers": {
     "anki-mcp": {
       "command": "node",
-      "args": ["./build/index.js"],
+      "args": ["/path-of-project/build/index.js"],
       "env": {
         "OPENAI_API_KEY": "你的OpenAI API密钥",
         "OPENAI_API_BASE": "可选的API基础URL",
