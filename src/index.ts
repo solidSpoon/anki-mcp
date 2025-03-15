@@ -31,15 +31,48 @@ const LOG_DIR = path.join(PROJECT_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, `anki-mcp-${new Date().toISOString().split('T')[0]}.log`);
 
 // 日志函数
-async function log(level: 'INFO' | 'ERROR' | 'DEBUG', message: string) {
+async function log(level: 'INFO' | 'ERROR' | 'DEBUG', message: string, error?: any) {
   const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] [${level}] ${message}\n`;
+  let logMessage = `[${timestamp}] [${level}] ${message}\n`;
+  
+  // 如果是错误，添加详细信息
+  if (error) {
+    // 确保错误对象被正确序列化
+    const errorObj = error instanceof Error ? error : new Error(JSON.stringify(error));
+    logMessage += `错误类型: ${errorObj.name}\n`;
+    logMessage += `错误信息: ${errorObj.message}\n`;
+    
+    // 如果是对象，记录其属性
+    if (typeof error === 'object' && error !== null) {
+      try {
+        const sanitizedError = Object.getOwnPropertyNames(error).reduce((acc, key) => {
+          try {
+            acc[key] = JSON.stringify(error[key]);
+          } catch (err: any) {
+            acc[key] = `[无法序列化: ${err.message}]`;
+          }
+          return acc;
+        }, {} as Record<string, string>);
+        
+        logMessage += `错误详情:\n${JSON.stringify(sanitizedError, null, 2)}\n`;
+      } catch (err: any) {
+        logMessage += `错误详情序列化失败: ${err.message}\n`;
+      }
+    }
+    
+    // 记录堆栈信息
+    if (errorObj.stack) {
+      logMessage += `堆栈信息:\n${errorObj.stack}\n`;
+    }
+    
+    logMessage += '---\n';
+  }
   
   try {
     await fs.mkdir(LOG_DIR, { recursive: true });
     await fs.appendFile(LOG_FILE, logMessage);
-  } catch (error) {
-    console.error('写入日志失败:', error);
+  } catch (err: any) {
+    console.error('写入日志失败:', err.message);
   }
   
   // 同时输出到控制台
@@ -69,28 +102,56 @@ const server = new McpServer({
 
 // Helper function for making AnkiConnect requests
 async function invokeAnkiConnect(action: string, params = {}) {
-  const response = await fetch(ANKI_CONNECT_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  try {
+    await log('DEBUG', `调用 AnkiConnect API: ${action}`, { action, params });
+    
+    const requestBody = {
       action,
       version: 6,
       params,
-    }),
-  });
+    };
+    
+    await log('DEBUG', '发送请求到 AnkiConnect', { url: ANKI_CONNECT_URL, body: requestBody });
+    
+    const response = await fetch(ANKI_CONNECT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
 
-  if (!response.ok) {
-    throw new Error(`AnkiConnect request failed: ${response.statusText}`);
+    if (!response.ok) {
+      const error = new Error(`AnkiConnect request failed: ${response.statusText}`);
+      (error as any).response = {
+        status: response.status,
+        statusText: response.statusText,
+        url: response.url
+      };
+      throw error;
+    }
+
+    const result = await response.json();
+    await log('DEBUG', '收到 AnkiConnect 响应', { result });
+    
+    if (result.error) {
+      const error = new Error(`AnkiConnect error: ${result.error}`);
+      (error as any).result = result;
+      throw error;
+    }
+
+    return result.result;
+  } catch (error: any) {
+    await log('ERROR', `AnkiConnect 请求失败: ${action}`, {
+      error,
+      request: {
+        action,
+        params: JSON.stringify(params),
+        url: ANKI_CONNECT_URL
+      }
+    });
+    throw error;
   }
-
-  const result = await response.json();
-  if (result.error) {
-    throw new Error(`AnkiConnect error: ${result.error}`);
-  }
-
-  return result.result;
 }
 
 // Helper function to format word for filename
@@ -185,102 +246,123 @@ server.tool(
       try {
         words = await readCsvFile(VOCAB_FILE) as any[];
       } catch (e) {
-        await log('DEBUG', 'Vocabulary file does not exist, creating new one');
+        await log('DEBUG', 'Vocabulary file does not exist, creating new one', e);
       }
 
       // 2. Generate audio files
-      await log('INFO', `Generating audio for word: ${word}`);
-      const wordAudio = await createAudioFile(word, word, "word");
-      
-      await log('INFO', 'Generating audio for definition');
-      const definitionAudio = await createAudioFile(definition, word, "definition");
-      
-      let exampleAudio = "";
-      if (example) {
-        await log('INFO', 'Generating audio for example');
-        exampleAudio = await createAudioFile(example, word, "example");
-      }
+      try {
+        await log('INFO', `Generating audio for word: ${word}`);
+        const wordAudio = await createAudioFile(word, word, "word");
+        
+        await log('INFO', 'Generating audio for definition');
+        const definitionAudio = await createAudioFile(definition, word, "definition");
+        
+        let exampleAudio = "";
+        if (example) {
+          await log('INFO', 'Generating audio for example');
+          exampleAudio = await createAudioFile(example, word, "example");
+        }
 
-      const newWord = {
-        word,
-        definition,
-        example,
-        notes,
-        tags: tags.join(","),
-        dateAdded: new Date().toISOString(),
-        wordAudio,
-        definitionAudio,
-        exampleAudio,
-      };
+        const newWord = {
+          word,
+          definition,
+          example,
+          notes,
+          tags: tags.join(","),
+          dateAdded: new Date().toISOString(),
+          wordAudio,
+          definitionAudio,
+          exampleAudio,
+        };
 
-      words.push(newWord);
-      await writeCsvFile(VOCAB_FILE, words);
+        words.push(newWord);
+        await writeCsvFile(VOCAB_FILE, words);
 
-      // 3. Create Anki card with template
-      const cardFront = `
-        <div class="container">
-          <div class="word">${word}</div>
-          <div class="hidden">[sound:${wordAudio}]</div>
-        </div>
-      `;
-
-      const cardBack = `
-        <div class="container">
-          <div class="header">
+        // 3. Create Anki card with template
+        const cardFront = `
+          <div class="container">
             <div class="word">${word}</div>
             <div class="hidden">[sound:${wordAudio}]</div>
           </div>
-          <div class="section">
-            <div class="label">Definition</div>
-            <div class="content">${definition}</div>
-            <div class="hidden">[sound:${definitionAudio}]</div>
+        `;
+
+        const cardBack = `
+          <div class="container">
+            <div class="header">
+              <div class="word">${word}</div>
+              <div class="hidden">[sound:${wordAudio}]</div>
+            </div>
+            <div class="section">
+              <div class="label">Definition</div>
+              <div class="content">${definition}</div>
+              <div class="hidden">[sound:${definitionAudio}]</div>
+            </div>
+            ${example ? `
+              <div class="section">
+                <div class="label">Example</div>
+                <div class="content">${example}</div>
+                <div class="hidden">[sound:${exampleAudio}]</div>
+              </div>
+            ` : ""}
+            ${notes ? `
+              <div class="section">
+                <div class="label">Notes</div>
+                <div class="content">${notes}</div>
+              </div>
+            ` : ""}
           </div>
-          ${example ? `
-            <div class="section">
-              <div class="label">Example</div>
-              <div class="content">${example}</div>
-              <div class="hidden">[sound:${exampleAudio}]</div>
-            </div>
-          ` : ""}
-          ${notes ? `
-            <div class="section">
-              <div class="label">Notes</div>
-              <div class="content">${notes}</div>
-            </div>
-          ` : ""}
-        </div>
-      `;
+        `;
 
-      // 4. Create note in Anki
-      await invokeAnkiConnect("createNote", {
-        note: {
-          deckName: ANKI_DECK_NAME,
-          modelName: ANKI_MODEL_NAME,
-          fields: {
-            Front: cardFront,
-            Back: cardBack,
+        // 4. Create note in Anki
+        await invokeAnkiConnect("addNote", {
+          note: {
+            deckName: ANKI_DECK_NAME,
+            modelName: ANKI_MODEL_NAME,
+            fields: {
+              Front: cardFront,
+              Back: cardBack,
+            },
+            tags: tags,
+            options: {
+              allowDuplicate: false,
+              duplicateScope: "deck",
+            },
           },
-          tags: tags,
-        },
-      });
+        });
 
-      await log('INFO', `Successfully added word: ${word}`);
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: `成功添加单词 "${word}" 到词汇表并创建了 Anki 卡片。`,
-          },
-        ],
-      };
+        await log('INFO', `Successfully added word: ${word}`);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `成功添加单词 "${word}" 到词汇表并创建了 Anki 卡片。`,
+            },
+          ],
+        };
+      } catch (audioError: any) {
+        await log('ERROR', `生成音频文件失败: ${word}`, audioError);
+        throw audioError;
+      }
     } catch (error: any) {
-      await log('ERROR', `Error adding word ${word}: ${error.message}`);
+      await log('ERROR', `Error adding word ${word}`, {
+        error,
+        context: {
+          word,
+          definition,
+          example,
+          notes,
+          tags,
+          ankiDeck: ANKI_DECK_NAME,
+          ankiModel: ANKI_MODEL_NAME,
+          ankiUrl: ANKI_CONNECT_URL
+        }
+      });
       return {
         content: [
           {
             type: "text",
-            text: `添加单词时出错: ${error.message}`,
+            text: `添加单词时出错: ${error.message}\n详细信息请查看日志文件。`,
           },
         ],
       };
