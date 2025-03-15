@@ -678,43 +678,138 @@ function formatInterval(interval: number): string {
 
 server.tool(
   "search-words",
-  "Search for words in the vocabulary list",
+  "Search words and definitions in Anki deck",
   {
     query: z.string().describe("Search query (word or definition)"),
+    limit: z.number().min(1).max(50).optional().describe("Maximum number of results to return (1-50, default: 20)"),
   },
-  async ({ query }) => {
-    try {
-      await ensureDirectories();
-      const words = await readCsvFile(VOCAB_FILE) as any[];
-      
-      const matchingWords = words.filter((w: any) => 
-        w.word.toLowerCase().includes(query.toLowerCase()) ||
-        w.definition.toLowerCase().includes(query.toLowerCase())
-      );
+  async ({ query, limit = 20 }) => {
+    const startTime = Date.now();
+    await log('INFO', `Search request received`, { query, limit });
 
-      const formattedWords = matchingWords.map((w: any) => 
-        `${w.word}\n` +
-        `Definition: ${w.definition}\n` +
-        `${w.example ? `Example: ${w.example}\n` : ""}` +
-        `${w.notes ? `Notes: ${w.notes}\n` : ""}` +
-        `${w.tags ? `Tags: ${w.tags}\n` : ""}` +
-        "---"
-      ).join("\n");
+    try {
+      // Search for matching cards using AnkiConnect
+      await log('DEBUG', `Searching in deck ${ANKI_DECK_NAME}: ${query}`);
+      const cardIds = await invokeAnkiConnect("findCards", {
+        query: `deck:${ANKI_DECK_NAME} ("Word:*${query}*" OR "Definition:*${query}*")`
+      });
+
+      await log('DEBUG', `Found ${cardIds.length} matching cards`);
+
+      if (cardIds.length === 0) {
+        await log('INFO', 'No matching cards found');
+        return {
+          content: [
+            {
+              type: "text",
+              text: `未找到包含 "${query}" 的单词。`,
+            },
+          ],
+        };
+      }
+
+      // Get card information
+      await log('DEBUG', `Fetching details for ${cardIds.length} cards`);
+      const cardsInfo: Array<{
+        note: number;
+        reps: number;
+        lapses: number;
+        interval: number;
+        due: number;
+      }> = await invokeAnkiConnect("cardsInfo", {
+        cards: cardIds
+      });
+
+      // Get note information
+      const noteIds = [...new Set(cardsInfo.map(card => card.note))];
+      const notesInfo: Array<{
+        noteId: number;
+        fields: {
+          Word: { value: string };
+          Definition: { value: string };
+          Example?: { value: string };
+        };
+        tags: string[];
+      }> = await invokeAnkiConnect("notesInfo", {
+        notes: noteIds
+      });
+
+      // Calculate relevance scores and sort results
+      const scoredNotes = notesInfo.map(note => {
+        const card = cardsInfo.find(c => c.note === note.noteId);
+        if (!card) return null;
+
+        // Calculate relevance score
+        const word = note.fields.Word.value.toLowerCase();
+        const definition = note.fields.Definition.value.toLowerCase();
+        const searchQuery = query.toLowerCase();
+        
+        let score = 0;
+        // Exact word match (highest priority)
+        if (word === searchQuery) score += 100;
+        // Word starts with query
+        else if (word.startsWith(searchQuery)) score += 80;
+        // Word contains query
+        else if (word.includes(searchQuery)) score += 60;
+        // Complete word match in definition
+        else if (definition.split(/\s+/).some(w => w === searchQuery)) score += 40;
+        // Definition contains query
+        else if (definition.includes(searchQuery)) score += 20;
+
+        return { note, card, score };
+      }).filter((item): item is NonNullable<typeof item> => item !== null)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      // Format output
+      const formattedNotes = scoredNotes.map(({ note, card }) => {
+        const accuracy = card.reps > 0 ? ((card.reps - card.lapses) / card.reps * 100).toFixed(1) : "N/A";
+        
+        return `单词: ${note.fields.Word.value}\n` +
+               `定义: ${note.fields.Definition.value}\n` +
+               `${note.fields.Example?.value ? `例句: ${note.fields.Example.value}\n` : ""}` +
+               `统计:\n` +
+               `- 复习次数: ${card.reps}\n` +
+               `- 遗忘次数: ${card.lapses}\n` +
+               `- 正确率: ${accuracy}%\n` +
+               `- 熟悉度: ${formatInterval(card.interval)}\n` +
+               `- 下次复习: ${new Date(card.due * 1000).toLocaleDateString()}\n` +
+               `${note.tags.length > 0 ? `标签: ${note.tags.join(", ")}\n` : ""}` +
+               "---";
+      }).join("\n");
+
+      const totalMatches = notesInfo.length;
+      const summary = `找到 ${totalMatches} 个匹配的单词${totalMatches > limit ? `（显示前 ${limit} 个最相关结果）` : ""}:\n\n`;
+
+      const executionTime = Date.now() - startTime;
+      await log('INFO', `Search completed successfully`, {
+        executionTime: `${executionTime}ms`,
+        totalMatches,
+        displayedResults: scoredNotes.length,
+        query,
+        relevanceOrder: scoredNotes.map(n => n.note.fields.Word.value).join(', ')
+      });
 
       return {
         content: [
           {
             type: "text",
-            text: formattedWords || `No words found matching "${query}".`,
+            text: summary + formattedNotes,
           },
         ],
       };
     } catch (error: any) {
+      const executionTime = Date.now() - startTime;
+      await log('ERROR', `Search operation failed`, {
+        error: error.message,
+        query,
+        executionTime: `${executionTime}ms`
+      });
       return {
         content: [
           {
             type: "text",
-            text: `Error searching words: ${error.message}`,
+            text: `搜索单词时出错: ${error.message}`,
           },
         ],
       };
