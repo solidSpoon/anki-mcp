@@ -493,42 +493,164 @@ server.tool(
 
 server.tool(
   "list-words",
-  "List all words in the vocabulary list",
-  {},
-  async () => {
+  `List words from Anki with various sorting options:
+
+  Sorting Methods:
+  - due: Sort by due date (less familiar words first)
+    Best for: Regular review sessions, focusing on words that need immediate attention
+    Use when: You want to practice words you're struggling with
+  
+  - recent: Sort by review frequency (most recently reviewed first)
+    Best for: Reviewing your recent learning progress
+    Use when: You want to see what you've been studying lately
+  
+  - difficulty: Sort by accuracy rate (most challenging words first)
+    Best for: Targeted practice on problematic words
+    Use when: You want to focus on words with high error rates
+  
+  - added: Sort by creation date (newest first)
+    Best for: Reviewing recently added vocabulary
+    Use when: You want to practice new words you've just learned
+  
+  - lapses: Sort by number of lapses (most forgotten first)
+    Best for: Identifying consistently troublesome words
+    Use when: You want to focus on words you frequently forget
+
+  Note: Results are limited to prevent overwhelming output. Use the limit parameter to adjust.`,
+  {
+    sortBy: z.enum([
+      "due",
+      "recent", 
+      "difficulty",
+      "added",
+      "lapses"
+    ]).optional().describe("Sorting method to use"),
+    limit: z.number().min(1).max(100).optional().describe("Maximum number of words to return (1-100, default: 20)"),
+  },
+  async ({ sortBy = "recent", limit = 20 }) => {
+    const startTime = Date.now();
+    await log('INFO', `List words request received`, { sortBy, limit });
+
     try {
-      await ensureDirectories();
-      const words = await readCsvFile(VOCAB_FILE) as any[];
-      
-      if (words.length === 0) {
+      // 获取指定牌组中的所有卡片
+      await log('DEBUG', `Fetching cards from deck: ${ANKI_DECK_NAME}`);
+      const cardIds = await invokeAnkiConnect("findCards", {
+        query: `deck:${ANKI_DECK_NAME}`
+      });
+
+      await log('DEBUG', `Found ${cardIds.length} cards in deck`);
+
+      if (cardIds.length === 0) {
+        await log('INFO', 'No cards found in deck');
         return {
           content: [
             {
               type: "text",
-              text: "Vocabulary list is empty. Use add-words-batch command to add new words.",
+              text: "No cards found in the deck. Please add some words first.",
             },
           ],
         };
       }
-      
-      const formattedWords = words.map((w: any) => 
-        `${w.word}\n` +
-        `Definition: ${w.definition}\n` +
-        `${w.example ? `Example: ${w.example}\n` : ""}` +
-        `${w.notes ? `Notes: ${w.notes}\n` : ""}` +
-        `${w.tags ? `Tags: ${w.tags}\n` : ""}` +
-        "---"
-      ).join("\n");
+
+      // 获取卡片详细信息
+      await log('DEBUG', `Fetching detailed information for ${cardIds.length} cards`);
+      const cardsInfo = await invokeAnkiConnect("cardsInfo", {
+        cards: cardIds
+      });
+
+      // 根据排序方式处理卡片
+      await log('DEBUG', `Sorting cards by: ${sortBy}`);
+      let sortedCards = [...cardsInfo];
+      switch (sortBy) {
+        case "due":
+          sortedCards.sort((a, b) => a.interval - b.interval);
+          await log('DEBUG', 'Cards sorted by interval (ascending)');
+          break;
+        case "recent":
+          sortedCards.sort((a, b) => b.reps - a.reps);
+          await log('DEBUG', 'Cards sorted by review count (descending)');
+          break;
+        case "difficulty":
+          sortedCards.sort((a, b) => {
+            const accuracyA = a.reps > 0 ? (a.reps - a.lapses) / a.reps : 0;
+            const accuracyB = b.reps > 0 ? (b.reps - b.lapses) / b.reps : 0;
+            return accuracyA - accuracyB;
+          });
+          await log('DEBUG', 'Cards sorted by accuracy rate (ascending)');
+          break;
+        case "added":
+          sortedCards.sort((a, b) => b.id - a.id);
+          await log('DEBUG', 'Cards sorted by card ID (descending)');
+          break;
+        case "lapses":
+          sortedCards.sort((a, b) => b.lapses - a.lapses);
+          await log('DEBUG', 'Cards sorted by lapse count (descending)');
+          break;
+      }
+
+      // 限制返回数量
+      sortedCards = sortedCards.slice(0, limit);
+      await log('DEBUG', `Limited result to ${sortedCards.length} cards`);
+
+      // 记录一些统计信息
+      const stats = {
+        totalCards: cardIds.length,
+        returnedCards: sortedCards.length,
+        averageReviews: sortedCards.reduce((sum, card) => sum + card.reps, 0) / sortedCards.length,
+        averageLapses: sortedCards.reduce((sum, card) => sum + card.lapses, 0) / sortedCards.length,
+        averageInterval: sortedCards.reduce((sum, card) => sum + card.interval, 0) / sortedCards.length,
+      };
+      await log('INFO', 'Card statistics', stats);
+
+      // 格式化输出
+      await log('DEBUG', 'Fetching note information for formatted output');
+      const formattedCards = await Promise.all(sortedCards.map(async (card) => {
+        const noteInfo = await invokeAnkiConnect("notesInfo", {
+          notes: [card.note]
+        });
+        const note = noteInfo[0];
+        const accuracy = card.reps > 0 ? ((card.reps - card.lapses) / card.reps * 100).toFixed(1) : "N/A";
+        
+        return `Word: ${note.fields.Word.value}\n` +
+          `Definition: ${note.fields.Definition.value}\n` +
+          `${note.fields.Example?.value ? `Example: ${note.fields.Example.value}\n` : ""}` +
+          `Stats:\n` +
+          `- Reviews: ${card.reps}\n` +
+          `- Lapses: ${card.lapses}\n` +
+          `- Accuracy: ${accuracy}%\n` +
+          `- Familiarity: ${formatInterval(card.interval)}\n` +
+          `- Next Review: ${new Date(card.due * 1000).toLocaleDateString()}\n` +
+          "---";
+      }));
+
+      const summary = `Showing ${sortedCards.length} words (sorted by: ${sortBy})\n\n`;
+
+      const executionTime = Date.now() - startTime;
+      await log('INFO', `List words request completed`, { 
+        executionTime: `${executionTime}ms`,
+        cardsReturned: sortedCards.length,
+        sortBy,
+        limit
+      });
 
       return {
         content: [
           {
             type: "text",
-            text: formattedWords,
+            text: summary + (formattedCards.join("\n") || "No matching words found."),
           },
         ],
       };
     } catch (error: any) {
+      const executionTime = Date.now() - startTime;
+      const errorDetails = {
+        message: error.message,
+        sortBy,
+        limit,
+        executionTime: `${executionTime}ms`
+      };
+      
+      await log('ERROR', `Failed to list words: ${error.message}`, errorDetails);
       return {
         content: [
           {
@@ -540,6 +662,16 @@ server.tool(
     }
   },
 );
+
+// 辅助函数：格式化时间间隔
+function formatInterval(interval: number): string {
+  if (interval === 0) return "新卡片";
+  if (interval < 24) return `${interval}小时`;
+  const days = Math.floor(interval / 24);
+  if (days < 30) return `${days}天`;
+  const months = Math.floor(days / 30);
+  return `${months}个月`;
+}
 
 server.tool(
   "search-words",
