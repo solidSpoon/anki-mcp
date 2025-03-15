@@ -228,7 +228,6 @@
     background-color: #f8f9fa;
     border-radius: 12px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    position: relative;
 }
 
 .label {
@@ -261,28 +260,14 @@
     .container {
         padding: 20px;
     }
-  
+    
     .word {
         font-size: 32px;
     }
-  
+    
     .content {
         font-size: 20px;
     }
-}
-
-/* 过渡效果 */
-.section {
-    transition: transform 0.2s ease;
-}
-
-.section:hover {
-    transform: translateY(-2px);
-}
-
-/* 间距和对比度 */
-.section + .section {
-    margin-top: 25px;
 }
 
 /* 夜间模式支持 */
