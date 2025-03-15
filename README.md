@@ -82,13 +82,7 @@
    npm install
    ```
 
-3. 配置环境变量：
-   ```bash
-   cp .env.example .env
-   # 编辑 .env 文件
-   ```
-
-4. 构建项目：
+3. 构建项目：
    ```bash
    npm run build
    ```
@@ -135,7 +129,6 @@
 ├── logs/               # 日志文件
 ├── src/
 │   └── index.ts       # 主程序
-├── .env.example       # 环境变量模板
 └── package.json
 ```
 
