@@ -317,6 +317,15 @@
 3. 词汇数据保存在 `data/vocabulary.csv`
 4. 详细日志保存在 `logs` 目录
 
+## 屏幕截图
+
+![9961742059512_.pic](https://ced-md-picture.oss-cn-beijing.aliyuncs.com/obsidian/29dd1cff117edf552361b9a8cc8e879655b39e567dfad73e8b0088a3cc05d807.jpg)
+
+![9971742059551_.pic](https://ced-md-picture.oss-cn-beijing.aliyuncs.com/obsidian/c2338c2a759e0ce239ee71fc1451b41d6fe10167275053e462331626064a0be7.jpg)
+
+![9991742059631_.pic](https://ced-md-picture.oss-cn-beijing.aliyuncs.com/obsidian/8e3df5823384f0928e9ce872ebef01fa1eba3094cc995e52082416d0fe1fcdb5.jpg)
+
+
 ## 许可证
 
 ISC
