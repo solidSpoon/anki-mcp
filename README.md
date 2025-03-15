@@ -53,8 +53,21 @@
 
 1. Node.js (v16+)
 2. Anki
-3. AnkiConnect 插件
+3. AnkiConnect 插件（插件代码：2055492159）
 4. OpenAI API 密钥
+
+### AnkiConnect 插件安装
+
+1. 打开 Anki
+2. 点击顶部菜单 Tools（工具） -> Add-ons（插件）
+3. 点击 "Get Add-ons..."（获取插件...）按钮
+4. 输入插件代码：`2055492159`
+5. 点击 OK 安装
+6. 重启 Anki 使插件生效
+7. 验证安装：
+   - 确保 Anki 正在运行
+   - 在浏览器中访问 `http://localhost:8765`
+   - 如果看到空白页面或 JSON 响应，说明插件安装成功
 
 ## 快速开始
 
@@ -137,6 +150,172 @@
    ```bash
    tail -f logs/anki-mcp-YYYY-MM-DD.log
    ```
+
+## Anki 模板配置
+
+在使用本工具之前，需要在 Anki 中创建正确的卡片模板。请按照以下步骤配置：
+
+1. 在 Anki 中创建一个新的笔记类型（Tools -> Manage Note Types -> Add）
+2. 添加以下字段：
+   - Word（单词）
+   - WordAudio（单词发音）
+   - Definition（释义）
+   - DefinitionAudio（释义发音）
+   - Example（例句）
+   - ExampleAudio（例句发音）
+
+3. 配置卡片模板：
+
+### 正面模板
+```html
+<div class="container">
+    <div class="word">{{Word}}</div>
+    <div class="audio-wrapper">{{WordAudio}}</div>
+</div>
+```
+
+### 背面模板
+```html
+<div class="container">
+    <!-- 单词部分 -->
+    <div class="header">
+        <div class="word">{{Word}}</div>
+        <div class="audio-wrapper">{{WordAudio}}</div>
+    </div>
+
+    <!-- 释义部分 -->
+    <div class="section">
+        <div class="label">Definition</div>
+        <div class="content">{{Definition}}</div>
+        <div class="audio-wrapper">{{DefinitionAudio}}</div>
+    </div>
+
+    <!-- 例句部分 -->
+    <div class="section">
+        <div class="label">Example</div>
+        <div class="content">{{Example}}</div>
+        <div class="audio-wrapper">{{ExampleAudio}}</div>
+    </div>
+</div>
+```
+
+### 样式表
+```css
+.card {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: #ffffff;
+    color: #2c3e50;
+    line-height: 1.6;
+}
+
+.container {
+    padding: 30px;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding-bottom: 30px;
+    border-bottom: 1px solid #eee;
+}
+
+.word {
+    font-size: 36px;
+    font-weight: 700;
+    color: #1a1a1a;
+    margin-bottom: 10px;
+    letter-spacing: 0.5px;
+}
+
+.section {
+    margin-bottom: 35px;
+    padding: 20px;
+    background-color: #f8f9fa;
+    border-radius: 12px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    position: relative;
+}
+
+.label {
+    font-size: 20px;
+    font-weight: 600;
+    color: #666;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.content {
+    font-size: 22px;
+    color: #2c3e50;
+    line-height: 1.7;
+    padding: 0 10px;
+}
+
+/* 隐藏音频控件 */
+.audio-wrapper {
+    height: 0;
+    width: 0;
+    opacity: 0;
+    overflow: hidden;
+    position: absolute;
+}
+
+/* 响应式设计 */
+@media (max-width: 480px) {
+    .container {
+        padding: 20px;
+    }
+  
+    .word {
+        font-size: 32px;
+    }
+  
+    .content {
+        font-size: 20px;
+    }
+}
+
+/* 过渡效果 */
+.section {
+    transition: transform 0.2s ease;
+}
+
+.section:hover {
+    transform: translateY(-2px);
+}
+
+/* 间距和对比度 */
+.section + .section {
+    margin-top: 25px;
+}
+
+/* 夜间模式支持 */
+.nightMode .card {
+    background-color: #1a1a1a;
+    color: #ffffff;
+}
+
+.nightMode .section {
+    background-color: #2d2d2d;
+}
+
+.nightMode .word {
+    color: #ffffff;
+}
+
+.nightMode .label {
+    color: #aaaaaa;
+}
+
+.nightMode .content {
+    color: #dddddd;
+}
+```
+
+4. 在环境变量中设置 `ANKI_MODEL_NAME` 为你创建的模板名称
 
 ## 注意事项
 
