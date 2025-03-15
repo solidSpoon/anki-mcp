@@ -278,148 +278,212 @@ async function ensureDirectories() {
   }
 }
 
+// Helper function to process a single word
+async function processWord(wordData: {
+  word: string;
+  definition: string;
+  example?: string;
+  notes?: string;
+  tags?: string[];
+}) {
+  const { word, definition, example = "", notes = "", tags = [] } = wordData;
+  
+  try {
+    await log('INFO', `Processing word: ${word}`);
+    
+    // Generate audio files
+    const wordAudio = await createAudioFile(word, word, "word");
+    const definitionAudio = await createAudioFile(definition, word, "definition");
+    let exampleAudio = "";
+    if (example) {
+      exampleAudio = await createAudioFile(example, word, "example");
+    }
+
+    // Create Anki note
+    const note = {
+      deckName: ANKI_DECK_NAME,
+      modelName: ANKI_MODEL_NAME,
+      fields: {
+        Word: word,
+        WordAudio: `[sound:${wordAudio}]`,
+        Definition: definition,
+        DefinitionAudio: `[sound:${definitionAudio}]`,
+        Example: example || "",
+        ExampleAudio: example ? `[sound:${exampleAudio}]` : "",
+      },
+      tags: tags,
+      options: {
+        allowDuplicate: false,
+        duplicateScope: "deck",
+      },
+    };
+
+    await invokeAnkiConnect("addNote", { note });
+
+    return {
+      word,
+      definition,
+      example,
+      notes,
+      tags: tags.join(","),
+      dateAdded: new Date().toISOString(),
+      wordAudio,
+      definitionAudio,
+      exampleAudio,
+    };
+  } catch (error) {
+    await log('ERROR', `处理单词失败: ${word}`, error);
+    throw error;
+  }
+}
+
+// Helper function to validate English text
+function isEnglishText(text: string): boolean {
+  // Allow English letters, numbers, basic punctuation, and whitespace
+  const englishPattern = /^[a-zA-Z0-9\s.,!?;:'"()\-\[\]]*$/;
+  return englishPattern.test(text);
+}
+
+// Helper function to validate word data
+function validateWordData(wordData: {
+  word: string;
+  definition: string;
+  example?: string;
+  notes?: string;
+  tags?: string[];
+}): { isValid: boolean; error?: string } {
+  // Validate word (only English letters allowed)
+  if (!/^[a-zA-Z\s\-']+$/.test(wordData.word)) {
+    return { isValid: false, error: `Word "${wordData.word}" must contain only English letters, spaces, hyphens, or apostrophes` };
+  }
+
+  // Validate definition (English text only)
+  if (!isEnglishText(wordData.definition)) {
+    return { isValid: false, error: `Definition for "${wordData.word}" must be in English` };
+  }
+
+  // Validate example if provided
+  if (wordData.example && !isEnglishText(wordData.example)) {
+    return { isValid: false, error: `Example for "${wordData.word}" must be in English` };
+  }
+
+  // Validate notes if provided
+  if (wordData.notes && !isEnglishText(wordData.notes)) {
+    return { isValid: false, error: `Notes for "${wordData.word}" must be in English` };
+  }
+
+  // Validate tags if provided
+  if (wordData.tags) {
+    for (const tag of wordData.tags) {
+      if (!/^[a-zA-Z0-9\-_]+$/.test(tag)) {
+        return { isValid: false, error: `Tag "${tag}" for word "${wordData.word}" must contain only English letters, numbers, hyphens, or underscores` };
+      }
+    }
+  }
+
+  return { isValid: true };
+}
+
 // Register tools
 server.tool(
-  "add-word",
-  "Add a new word to vocabulary list and create Anki card",
+  "add-words-batch",
+  "Add words to vocabulary list and create Anki cards (supports both single and batch operations). For single word, pass an array with one item.",
   {
-    word: z.string().describe("The word to add"),
-    definition: z.string().describe("The definition of the word"),
-    example: z.string().optional().describe("An example sentence using the word"),
-    notes: z.string().optional().describe("Additional notes about the word"),
-    tags: z.array(z.string()).optional().describe("Tags for categorizing the word"),
+    words: z.array(z.object({
+      word: z.string().describe("The word to add (English only)"),
+      definition: z.string().describe("The definition of the word (English only)"),
+      example: z.string().optional().describe("An example sentence using the word (English only)"),
+      notes: z.string().optional().describe("Additional notes about the word (English only)"),
+      tags: z.array(z.string()).optional().describe("Tags for categorizing the word (alphanumeric, hyphens, and underscores only)"),
+    })).describe("Array of words to add (single item for single word)"),
   },
-  async ({ word, definition, example = "", notes = "", tags = [] }) => {
+  async ({ words }) => {
     try {
-      await log('INFO', `Adding new word: ${word}`);
-      
-      // 1. Add to CSV
+      const wordCount = words.length;
+      const isSingleWord = wordCount === 1;
+      await log('INFO', isSingleWord ? `Adding word: ${words[0].word}` : `Starting batch addition of ${wordCount} words`);
       await ensureDirectories();
-      let words = [];
-      try {
-        words = await readCsvFile(VOCAB_FILE) as any[];
-      } catch (e) {
-        await log('DEBUG', 'Vocabulary file does not exist, creating new one', e);
+
+      // Validate all words first
+      for (const wordData of words) {
+        const validation = validateWordData(wordData);
+        if (!validation.isValid) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Validation Error: ${validation.error}`,
+              },
+            ],
+          };
+        }
       }
 
-      // 2. Generate audio files
-      try {
-        await log('INFO', `Generating audio for word: ${word}`);
-        const wordAudio = await createAudioFile(word, word, "word");
-        
-        await log('INFO', 'Generating audio for definition');
-        const definitionAudio = await createAudioFile(definition, word, "definition");
-        
-        let exampleAudio = "";
-        if (example) {
-          await log('INFO', 'Generating audio for example');
-          exampleAudio = await createAudioFile(example, word, "example");
+      // Read existing vocabulary
+      let existingWords = await readCsvFile(VOCAB_FILE) as any[];
+      const results = {
+        success: [] as any[],
+        failed: [] as { word: string; error: string }[],
+      };
+
+      // Process each word
+      for (const wordData of words) {
+        try {
+          const processedWord = await processWord(wordData);
+          results.success.push(processedWord);
+          existingWords.push(processedWord);
+        } catch (error: any) {
+          results.failed.push({
+            word: wordData.word,
+            error: error.message,
+          });
         }
-
-        const newWord = {
-          word,
-          definition,
-          example,
-          notes,
-          tags: tags.join(","),
-          dateAdded: new Date().toISOString(),
-          wordAudio,
-          definitionAudio,
-          exampleAudio,
-        };
-
-        words.push(newWord);
-        await writeCsvFile(VOCAB_FILE, words);
-
-        // 3. Create Anki card with template
-        const cardFront = `
-          <div class="container">
-            <div class="word">${word}</div>
-            <div class="hidden">[sound:${wordAudio}]</div>
-          </div>
-        `;
-
-        const cardBack = `
-          <div class="container">
-            <div class="header">
-              <div class="word">${word}</div>
-              <div class="hidden">[sound:${wordAudio}]</div>
-            </div>
-            <div class="section">
-              <div class="label">Definition</div>
-              <div class="content">${definition}</div>
-              <div class="hidden">[sound:${definitionAudio}]</div>
-            </div>
-            ${example ? `
-              <div class="section">
-                <div class="label">Example</div>
-                <div class="content">${example}</div>
-                <div class="hidden">[sound:${exampleAudio}]</div>
-              </div>
-            ` : ""}
-            ${notes ? `
-              <div class="section">
-                <div class="label">Notes</div>
-                <div class="content">${notes}</div>
-              </div>
-            ` : ""}
-          </div>
-        `;
-
-        // 4. Create note in Anki
-        await invokeAnkiConnect("addNote", {
-          note: {
-            deckName: ANKI_DECK_NAME,
-            modelName: ANKI_MODEL_NAME,
-            fields: {
-              Word: word,
-              WordAudio: `[sound:${wordAudio}]`,
-              Definition: definition,
-              DefinitionAudio: `[sound:${definitionAudio}]`,
-              Example: example || "",
-              ExampleAudio: example ? `[sound:${exampleAudio}]` : "",
-            },
-            tags: tags,
-            options: {
-              allowDuplicate: false,
-              duplicateScope: "deck",
-            },
-          },
-        });
-
-        await log('INFO', `Successfully added word: ${word}`);
-        
-        return {
-          content: [
-            {
-              type: "text",
-              text: `成功添加单词 "${word}" 到词汇表并创建了 Anki 卡片。`,
-            },
-          ],
-        };
-      } catch (audioError: any) {
-        await log('ERROR', `生成音频文件失败: ${word}`, audioError);
-        throw audioError;
       }
-    } catch (error: any) {
-      await log('ERROR', `Error adding word ${word}`, {
-        error,
-        context: {
-          word,
-          definition,
-          example,
-          notes,
-          tags,
-          ankiDeck: ANKI_DECK_NAME,
-          ankiModel: ANKI_MODEL_NAME,
-          ankiUrl: ANKI_CONNECT_URL
+
+      // Update vocabulary file
+      if (results.success.length > 0) {
+        await writeCsvFile(VOCAB_FILE, existingWords);
+      }
+
+      // Prepare response message
+      let responseMessage = '';
+      if (isSingleWord) {
+        if (results.success.length === 1) {
+          responseMessage = `✅ Successfully added word: "${words[0].word}"`;
+        } else {
+          responseMessage = `❌ Failed to add word "${words[0].word}": ${results.failed[0].error}`;
         }
-      });
+      } else {
+        responseMessage = `Batch addition completed:\n`;
+        responseMessage += `✅ Successfully added: ${results.success.length} words\n`;
+        if (results.failed.length > 0) {
+          responseMessage += `❌ Failed: ${results.failed.length} words\n\n`;
+          responseMessage += `Failure details:\n`;
+          results.failed.forEach(({ word, error }) => {
+            responseMessage += `- ${word}: ${error}\n`;
+          });
+        }
+      }
+
       return {
         content: [
           {
             type: "text",
-            text: `添加单词时出错: ${error.message}\n详细信息请查看日志文件。`,
+            text: responseMessage,
+          },
+        ],
+      };
+    } catch (error: any) {
+      const errorMessage = words.length === 1 
+        ? `Error adding word "${words[0].word}": ${error.message}`
+        : `Error in batch addition: ${error.message}`;
+      
+      await log('ERROR', errorMessage, error);
+      return {
+        content: [
+          {
+            type: "text",
+            text: errorMessage,
           },
         ],
       };
@@ -441,7 +505,7 @@ server.tool(
           content: [
             {
               type: "text",
-              text: "词汇列表为空。使用 add-word 命令来添加新单词。",
+              text: "Vocabulary list is empty. Use add-words-batch command to add new words.",
             },
           ],
         };
@@ -449,10 +513,10 @@ server.tool(
       
       const formattedWords = words.map((w: any) => 
         `${w.word}\n` +
-        `定义: ${w.definition}\n` +
-        `${w.example ? `例句: ${w.example}\n` : ""}` +
-        `${w.notes ? `笔记: ${w.notes}\n` : ""}` +
-        `${w.tags ? `标签: ${w.tags}\n` : ""}` +
+        `Definition: ${w.definition}\n` +
+        `${w.example ? `Example: ${w.example}\n` : ""}` +
+        `${w.notes ? `Notes: ${w.notes}\n` : ""}` +
+        `${w.tags ? `Tags: ${w.tags}\n` : ""}` +
         "---"
       ).join("\n");
 
@@ -469,7 +533,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `列出单词时出错: ${error.message}`,
+            text: `Error listing words: ${error.message}`,
           },
         ],
       };
@@ -495,10 +559,10 @@ server.tool(
 
       const formattedWords = matchingWords.map((w: any) => 
         `${w.word}\n` +
-        `定义: ${w.definition}\n` +
-        `${w.example ? `例句: ${w.example}\n` : ""}` +
-        `${w.notes ? `笔记: ${w.notes}\n` : ""}` +
-        `${w.tags ? `标签: ${w.tags}\n` : ""}` +
+        `Definition: ${w.definition}\n` +
+        `${w.example ? `Example: ${w.example}\n` : ""}` +
+        `${w.notes ? `Notes: ${w.notes}\n` : ""}` +
+        `${w.tags ? `Tags: ${w.tags}\n` : ""}` +
         "---"
       ).join("\n");
 
@@ -506,7 +570,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: formattedWords || `没有找到匹配 "${query}" 的单词。`,
+            text: formattedWords || `No words found matching "${query}".`,
           },
         ],
       };
@@ -515,7 +579,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `搜索单词时出错: ${error.message}`,
+            text: `Error searching words: ${error.message}`,
           },
         ],
       };
