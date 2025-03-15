@@ -196,21 +196,74 @@ async function createAudioFile(text: string, word: string, audioType: string): P
 
 // Helper function to read CSV file
 async function readCsvFile(filePath: string) {
-  const content = await fs.readFile(filePath, "utf-8");
-  return new Promise((resolve, reject) => {
-    parse(content, {
-      columns: true,
-      skip_empty_lines: true,
-    }, (err, data) => {
-      if (err) reject(err);
-      else resolve(data);
+  try {
+    const content = await fs.readFile(filePath, "utf-8");
+    return new Promise((resolve, reject) => {
+      parse(content, {
+        columns: true,
+        skip_empty_lines: true,
+      }, (err, data) => {
+        if (err) reject(err);
+        else {
+          // 将数据转换为以单词为键的对象
+          const wordMap = (data as any[]).reduce((acc, curr) => {
+            // 使用 toLowerCase 来确保不区分大小写
+            const key = curr.word.toLowerCase();
+            // 如果已存在该单词，比较日期，保留最新的记录
+            if (acc[key]) {
+              const existingDate = new Date(acc[key].dateAdded);
+              const newDate = new Date(curr.dateAdded);
+              if (newDate > existingDate) {
+                acc[key] = curr;
+              }
+            } else {
+              acc[key] = curr;
+            }
+            return acc;
+          }, {} as Record<string, any>);
+          
+          // 转换回数组形式
+          resolve(Object.values(wordMap));
+        }
+      });
     });
-  });
+  } catch (e) {
+    // 如果文件不存在，返回空数组
+    if ((e as any).code === 'ENOENT') {
+      return [];
+    }
+    throw e;
+  }
 }
 
 // Helper function to write CSV file
 async function writeCsvFile(filePath: string, data: any[]) {
-  const csvContent = stringify(data, { header: true });
+  // 确保数据是数组
+  if (!Array.isArray(data)) {
+    throw new Error('数据必须是数组格式');
+  }
+  
+  // 去重处理
+  const wordMap = data.reduce((acc, curr) => {
+    const key = curr.word.toLowerCase();
+    if (acc[key]) {
+      const existingDate = new Date(acc[key].dateAdded);
+      const newDate = new Date(curr.dateAdded);
+      if (newDate > existingDate) {
+        acc[key] = curr;
+      }
+    } else {
+      acc[key] = curr;
+    }
+    return acc;
+  }, {} as Record<string, any>);
+  
+  // 转换回数组并按添加日期排序
+  const uniqueData = (Object.values(wordMap) as Array<{ dateAdded: string }>).sort((a, b) => 
+    new Date(b.dateAdded).getTime() - new Date(a.dateAdded).getTime()
+  );
+  
+  const csvContent = stringify(uniqueData, { header: true });
   await fs.writeFile(filePath, csvContent);
 }
 
@@ -319,8 +372,12 @@ server.tool(
             deckName: ANKI_DECK_NAME,
             modelName: ANKI_MODEL_NAME,
             fields: {
-              Front: cardFront,
-              Back: cardBack,
+              Word: word,
+              WordAudio: `[sound:${wordAudio}]`,
+              Definition: definition,
+              DefinitionAudio: `[sound:${definitionAudio}]`,
+              Example: example || "",
+              ExampleAudio: example ? `[sound:${exampleAudio}]` : "",
             },
             tags: tags,
             options: {
