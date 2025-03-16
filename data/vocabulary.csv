@@ -1,2 +1,37 @@
-word,definition,example,notes,tags,dateAdded,wordAudio,definitionAudio,exampleAudio
-ephemeral,lasting for a very short time,"Social media posts are often ephemeral, disappearing after 24 hours.",,,2025-03-15T17:24:18.758Z,ephemeral-word-9a269212.mp3,ephemeral-definition-088858f5.mp3,ephemeral-example-1501550c.mp3
+word,definition,example,tags,dateAdded
+Coal,"A black, solid fossil fuel used as a fuel source for heating and power generation.",The heating plant burned coal to produce hot water for the town.,"[""energy"",""materials""]",2025-03-16T03:38:44.413Z
+Boiler,A device in a heating plant that burns fuel to generate hot water or steam for heating.,The boiler was the heart of the building's heating system.,"[""heating"",""equipment""]",2025-03-16T03:38:44.235Z
+Radiator,"A heating device, typically mounted on the wall, that transfers heat from hot water or steam to the air in a room.",The radiator made a gentle ticking sound as it heated up the room.,"[""home"",""heating""]",2025-03-16T03:38:41.232Z
+Heating Plant,"A facility that generates heat, usually in the form of hot water or steam, for distribution to buildings.",The heating plant provided warmth to the entire neighborhood through underground pipes.,"[""infrastructure"",""heating""]",2025-03-16T03:38:35.880Z
+Underfloor Heating,A system where hot water or electric coils are installed beneath the floor to heat a room.,The underfloor heating kept the tiles warm underfoot.,"[""home"",""heating""]",2025-03-16T03:38:35.632Z
+Blanket,"A large piece of soft fabric used to cover oneself for warmth, especially while sleeping.",She pulled the blanket up to her chin to stay warm during the cold night.,"[""household"",""bedding""]",2025-03-16T03:38:33.383Z
+Pajamas,"Soft, comfortable clothing worn for sleeping or lounging.",She changed into her favorite pajamas before bed.,"[""clothing"",""household""]",2025-03-16T03:38:31.084Z
+Duvet,"A soft quilt filled with down, feathers, or a synthetic alternative, used as a blanket.",The thick duvet kept him warm all night.,"[""household"",""bedding""]",2025-03-16T03:38:30.481Z
+Plush toy,"A soft toy stuffed with materials like cotton, often resembling animals or characters.",She had a collection of plush toys on her bed.,"[""objects"",""household""]",2025-03-16T03:37:40.612Z
+Mars transfer window,The optimal time to launch a mission to Mars when Earth and Mars are properly aligned in their orbits.,SpaceX is preparing for the next Mars transfer window.,"[""astronomy"",""space"",""science""]",2025-03-16T03:37:40.578Z
+Scarecrow,"A figure made to resemble a human, placed in fields to scare away birds from crops.","The scarecrow stood in the field, guarding the corn.","[""agriculture"",""objects""]",2025-03-16T03:37:39.505Z
+Scheduling,The act of planning and arranging times for events or activities.,Talking to tutors felt stressful because of the scheduling and pressure to converse.,"[""organization"",""time_management""]",2025-03-16T03:36:57.193Z
+E-commerce,The buying and selling of goods or services over the internet.,I work for an international e-commerce company.,"[""business"",""technology""]",2025-03-16T03:36:54.265Z
+Mastery,A high level of skill or knowledge in a particular subject.,The first approach focuses on mastery of a small set of words before moving on.,"[""learning"",""skills""]",2025-03-16T03:36:54.194Z
+Perspective,A particular way of thinking about something.,My perspective on learning changed after I saw progress from consistent effort.,"[""thinking"",""concepts""]",2025-03-16T03:36:53.776Z
+Retention,The ability to remember and keep information over time.,This learning method helps improve long-term retention of new vocabulary.,"[""learning"",""memory""]",2025-03-16T03:36:50.408Z
+Immersion,The act of surrounding yourself completely in a language or activity to learn it better.,Watching English series is a great way to create an immersion environment for learning.,"[""learning"",""language""]",2025-03-16T03:36:46.110Z
+Exposure,The state of being introduced to or experiencing something repeatedly.,The second approach to vocabulary learning focuses on repeated exposure to new words.,"[""learning"",""concepts""]",2025-03-16T03:36:44.616Z
+Transcription,The process of converting spoken language into written text.,I often use the Whisper model for accurate transcriptions of videos.,"[""language"",""technology""]",2025-03-16T03:36:42.427Z
+Repetition,The act of doing something again and again to improve or learn.,"Repetition is key to mastering a new skill, like learning English vocabulary.","[""learning"",""concepts""]",2025-03-16T03:36:42.394Z
+Quilt,"A type of blanket made by stitching together layers of fabric, often with decorative patterns.",I bought a new quilt cover to match my bedroom's decor.,"[""household"",""objects""]",2025-03-16T03:36:42.316Z
+Daylight Saving Time,The practice of setting the clocks forward by one hour in spring and back by one hour in fall to make better use of natural daylight.,We had to adjust our program schedule to match the U.S. Daylight Saving Time changes.,,2025-03-16T03:34:11.684Z
+Extravaganza,"A large, elaborate, and exciting event or show.",Singles' Day in China has turned into a shopping extravaganza that lasts for an entire month.,,2025-03-16T03:34:08.333Z
+Snooze,"A short period of light sleep, especially one taken after the alarm rings.","I set my iPhone alarm and hit the snooze button, enjoying nine extra minutes of sleep.",,2025-03-16T03:34:08.080Z
+Slim down,"To make something thinner, lighter, or smaller in size.",Apple managed to slim down the Mac Mini's design thanks to their M-series chips.,,2025-03-16T03:34:07.511Z
+Interconnected,Linked or related to one another.,Computer techniques have made meteorology and programming more interconnected than ever before.,,2025-03-16T03:33:27.682Z
+Versatility,The ability to adapt or be used in many different ways.,"Multi-modal AI models, like the one from Anthropic, show versatility in handling both text and screen interactions.",,2025-03-16T03:33:24.184Z
+Scalable,Able to grow or expand to handle increased demand or workload.,Virtual threads make Java applications more scalable by managing thousands of concurrent tasks efficiently.,,2025-03-16T03:33:23.064Z
+Seamless,"Smooth and continuous, with no disruptions or noticeable changes.",Anthropic's new AI features aim to create a seamless interaction between the model and your computer.,,2025-03-16T03:33:22.635Z
+Cascade,"A process where something happens in a sequence, with each step triggering the next.","In programming, making one function asynchronous often causes a cascade of changes, requiring other functions to become asynchronous too.",,2025-03-16T03:33:19.084Z
+Explicitness,"The quality of being clear and easy to understand, leaving no room for confusion.",Java's explicitness in exception handling ensures that errors are caught early in the development process.,,2025-03-16T03:33:16.527Z
+Burdensome,"Something that is heavy or difficult to manage, either physically or mentally.","Reviewing hundreds of vocabulary words daily can become burdensome, but repetition eventually helps.",,2025-03-16T03:33:16.333Z
+Disguise,To change one's appearance or behavior to conceal one's identity or blend in with surroundings.,"In the game, one of the hiders disguised herself as an old man by using makeup and walked around the square.",,2025-03-16T03:32:35.448Z
+Hollow,Having an empty space inside.,"The seeker stepped on the piece of wood and noticed it was hollow, which led to discovering the hider beneath it.",,2025-03-16T03:32:34.862Z
+Pile,A heap or stack of something.,The hider buried himself in a dirt pile and covered it with dry grass to blend into the environment.,,2025-03-16T03:32:33.180Z
+ephemeral,lasting for a very short time,"Social media posts are often ephemeral, disappearing after 24 hours.",,2025-03-15T17:24:18.758Z
