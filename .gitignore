@@ -28,5 +28,7 @@ Thumbs.db
 logs/
 *.log
 
+data/audio/
+
 # Audio files (optional, depending on whether you want to version control them)
 # data/audio/ 
