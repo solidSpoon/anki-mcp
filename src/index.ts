@@ -3,396 +3,43 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { parse } from "csv-parse";
-import { stringify } from "csv-stringify/sync";
-import { promises as fs } from "fs";
-import path from "path";
-import os from "os";
-import crypto from "crypto";
 import OpenAI from "openai";
 import dotenv from "dotenv";
-import { fileURLToPath } from 'url';
+import { log } from './logger.js';
+import { formatInterval } from './utils.js';
+import { AnkiService } from './services/anki-service.js';
+import { AudioService } from './services/audio-service.js';
+import { VocabularyService } from './services/vocabulary-service.js';
 
 // 加载环境变量
 dotenv.config();
 
 // 验证必要的环境变量
 if (!process.env.OPENAI_API_KEY) {
-  console.error("错误: 未设置 OPENAI_API_KEY 环境变量");
+  await log('ERROR', "未设置 OPENAI_API_KEY 环境变量");
   process.exit(1);
 }
 
-// 定义项目路径
-const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const DATA_DIR = path.join(PROJECT_ROOT, "data");
-const AUDIO_DIR = path.join(DATA_DIR, "audio");
-const VOCAB_FILE = path.join(DATA_DIR, "vocabulary.csv");
-const LOG_DIR = path.join(PROJECT_ROOT, "logs");
-const LOG_FILE = path.join(LOG_DIR, `anki-mcp-${new Date().toISOString().split('T')[0]}.log`);
-
-// 日志函数
-async function log(level: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) {
-  const timestamp = new Date().toISOString();
-  let logMessage = `[${timestamp}] [${level}] ${message}\n`;
-  
-  // 如果有额外数据需要记录
-  if (data) {
-    // 如果是错误级别的日志，添加详细的错误信息
-    if (level === 'ERROR') {
-      // 确保错误对象被正确序列化
-      const errorObj = data instanceof Error ? data : new Error(JSON.stringify(data));
-      logMessage += `错误类型: ${errorObj.name}\n`;
-      logMessage += `错误信息: ${errorObj.message}\n`;
-      
-      // 如果是对象，记录其属性
-      if (typeof data === 'object' && data !== null) {
-        try {
-          const sanitizedError = Object.getOwnPropertyNames(data).reduce((acc, key) => {
-            try {
-              acc[key] = JSON.stringify(data[key]);
-            } catch (err: any) {
-              acc[key] = `[无法序列化: ${err.message}]`;
-            }
-            return acc;
-          }, {} as Record<string, string>);
-          
-          logMessage += `错误详情:\n${JSON.stringify(sanitizedError, null, 2)}\n`;
-        } catch (err: any) {
-          logMessage += `错误详情序列化失败: ${err.message}\n`;
-        }
-      }
-      
-      // 记录堆栈信息
-      if (errorObj.stack) {
-        logMessage += `堆栈信息:\n${errorObj.stack}\n`;
-      }
-      
-      logMessage += '---\n';
-    } else {
-      // 对于非错误级别的日志，只记录数据的简单字符串表示
-      try {
-        logMessage += `${JSON.stringify(data, null, 2)}\n`;
-      } catch (err: any) {
-        logMessage += `[数据序列化失败: ${err.message}]\n`;
-      }
-    }
-  }
-  
-  try {
-    await fs.mkdir(LOG_DIR, { recursive: true });
-    await fs.appendFile(LOG_FILE, logMessage);
-  } catch (err: any) {
-    console.error('写入日志失败:', err.message);
-  }
-  
-  // 同时输出到控制台
-  if (level === 'ERROR') {
-    console.error(logMessage);
-  } else {
-    console.log(logMessage);
-  }
-}
-
-// AnkiConnect API endpoint
-const ANKI_CONNECT_URL = process.env.ANKI_CONNECT_URL || "http://localhost:8765";
-const ANKI_DECK_NAME = process.env.ANKI_DECK_NAME || "Vocabulary";
-const ANKI_MODEL_NAME = process.env.ANKI_MODEL_NAME || "Basic";
-
-// OpenAI 配置
+// 初始化服务
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_API_BASE,
 });
+
+const ankiService = new AnkiService(
+  process.env.ANKI_CONNECT_URL,
+  process.env.ANKI_DECK_NAME,
+  process.env.ANKI_MODEL_NAME
+);
+
+const audioService = new AudioService(openai, ankiService);
+const vocabularyService = new VocabularyService(ankiService, audioService);
 
 // Create server instance
 const server = new McpServer({
   name: "anki-mcp",
   version: "1.0.0",
 });
-
-// Helper function for making AnkiConnect requests
-async function invokeAnkiConnect(action: string, params = {}) {
-  try {
-    await log('DEBUG', `调用 AnkiConnect API: ${action}`, { action, params });
-    
-    const requestBody = {
-      action,
-      version: 6,
-      params,
-    };
-    
-    await log('DEBUG', '发送请求到 AnkiConnect', { url: ANKI_CONNECT_URL, body: requestBody });
-    
-    const response = await fetch(ANKI_CONNECT_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const error = new Error(`AnkiConnect request failed: ${response.statusText}`);
-      (error as any).response = {
-        status: response.status,
-        statusText: response.statusText,
-        url: response.url
-      };
-      throw error;
-    }
-
-    const result = await response.json();
-    await log('DEBUG', '收到 AnkiConnect 响应', { result });
-    
-    if (result.error) {
-      const error = new Error(`AnkiConnect error: ${result.error}`);
-      (error as any).result = result;
-      throw error;
-    }
-
-    return result.result;
-  } catch (error: any) {
-    await log('ERROR', `AnkiConnect 请求失败: ${action}`, {
-      error,
-      request: {
-        action,
-        params: JSON.stringify(params),
-        url: ANKI_CONNECT_URL
-      }
-    });
-    throw error;
-  }
-}
-
-// Helper function to format word for filename
-function formatWordForFilename(word: string): string {
-  return word.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-}
-
-// Helper function to get stable hash
-function getStableHash(text: string): string {
-  return crypto.createHash("md5").update(text).digest("hex").slice(0, 8);
-}
-
-// Helper function to create audio file
-async function createAudioFile(text: string, word: string, audioType: string): Promise<string> {
-  const formattedWord = formatWordForFilename(word);
-  const stableHash = getStableHash(text);
-  const audioFilename = `${formattedWord}-${audioType}-${stableHash}.mp3`;
-  const audioPath = path.join(AUDIO_DIR, audioFilename);
-
-  try {
-    await fs.access(audioPath);
-  } catch (e) {
-    const mp3Response = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: "alloy",
-      input: text,
-      response_format: "mp3",
-    });
-
-    const buffer = Buffer.from(await mp3Response.arrayBuffer());
-    await fs.writeFile(audioPath, buffer);
-
-    // 将音频文件添加到 Anki
-    await invokeAnkiConnect("storeMediaFile", {
-      filename: audioFilename,
-      data: buffer.toString("base64"),
-    });
-  }
-
-  return audioFilename;
-}
-
-// Helper function to read CSV file
-async function readCsvFile(filePath: string) {
-  try {
-    const content = await fs.readFile(filePath, "utf-8");
-    return new Promise((resolve, reject) => {
-      parse(content, {
-        columns: true,
-        skip_empty_lines: true,
-      }, (err, data) => {
-        if (err) reject(err);
-        else {
-          // 将数据转换为以单词为键的对象
-          const wordMap = (data as any[]).reduce((acc, curr) => {
-            // 使用 toLowerCase 来确保不区分大小写
-            const key = curr.word.toLowerCase();
-            // 如果已存在该单词，比较日期，保留最新的记录
-            if (acc[key]) {
-              const existingDate = new Date(acc[key].dateAdded);
-              const newDate = new Date(curr.dateAdded);
-              if (newDate > existingDate) {
-                acc[key] = curr;
-              }
-            } else {
-              acc[key] = curr;
-            }
-            return acc;
-          }, {} as Record<string, any>);
-          
-          // 转换回数组形式
-          resolve(Object.values(wordMap));
-        }
-      });
-    });
-  } catch (e) {
-    // 如果文件不存在，返回空数组
-    if ((e as any).code === 'ENOENT') {
-      return [];
-    }
-    throw e;
-  }
-}
-
-// Helper function to write CSV file
-async function writeCsvFile(filePath: string, data: any[]) {
-  // 确保数据是数组
-  if (!Array.isArray(data)) {
-    throw new Error('数据必须是数组格式');
-  }
-  
-  // 去重处理
-  const wordMap = data.reduce((acc, curr) => {
-    const key = curr.word.toLowerCase();
-    if (acc[key]) {
-      const existingDate = new Date(acc[key].dateAdded);
-      const newDate = new Date(curr.dateAdded);
-      if (newDate > existingDate) {
-        acc[key] = curr;
-      }
-    } else {
-      acc[key] = curr;
-    }
-    return acc;
-  }, {} as Record<string, any>);
-  
-  // 转换回数组并按添加日期排序
-  const uniqueData = (Object.values(wordMap) as Array<{ dateAdded: string }>).sort((a, b) => 
-    new Date(b.dateAdded).getTime() - new Date(a.dateAdded).getTime()
-  );
-  
-  const csvContent = stringify(uniqueData, { header: true });
-  await fs.writeFile(filePath, csvContent);
-}
-
-// Helper function to ensure directories exist
-async function ensureDirectories() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.mkdir(AUDIO_DIR, { recursive: true });
-  try {
-    await fs.access(VOCAB_FILE);
-  } catch (e) {
-    await writeCsvFile(VOCAB_FILE, []);
-  }
-}
-
-// Helper function to process a single word
-async function processWord(wordData: {
-  word: string;
-  definition: string;
-  example?: string;
-  notes?: string;
-  tags?: string[];
-}) {
-  const { word, definition, example = "", notes = "", tags = [] } = wordData;
-  
-  try {
-    await log('INFO', `Processing word: ${word}`);
-    
-    // Generate audio files
-    const wordAudio = await createAudioFile(word, word, "word");
-    const definitionAudio = await createAudioFile(definition, word, "definition");
-    let exampleAudio = "";
-    if (example) {
-      exampleAudio = await createAudioFile(example, word, "example");
-    }
-
-    // Create Anki note
-    const note = {
-      deckName: ANKI_DECK_NAME,
-      modelName: ANKI_MODEL_NAME,
-      fields: {
-        Word: word,
-        WordAudio: `[sound:${wordAudio}]`,
-        Definition: definition,
-        DefinitionAudio: `[sound:${definitionAudio}]`,
-        Example: example || "",
-        ExampleAudio: example ? `[sound:${exampleAudio}]` : "",
-      },
-      tags: tags,
-      options: {
-        allowDuplicate: false,
-        duplicateScope: "deck",
-      },
-    };
-
-    await invokeAnkiConnect("addNote", { note });
-
-    return {
-      word,
-      definition,
-      example,
-      notes,
-      tags: tags.join(","),
-      dateAdded: new Date().toISOString(),
-      wordAudio,
-      definitionAudio,
-      exampleAudio,
-    };
-  } catch (error) {
-    await log('ERROR', `处理单词失败: ${word}`, error);
-    throw error;
-  }
-}
-
-// Helper function to validate English text
-function isEnglishText(text: string): boolean {
-  // Allow English letters, numbers, basic punctuation, and whitespace
-  const englishPattern = /^[a-zA-Z0-9\s.,!?;:'"()\-\[\]]*$/;
-  return englishPattern.test(text);
-}
-
-// Helper function to validate word data
-function validateWordData(wordData: {
-  word: string;
-  definition: string;
-  example?: string;
-  notes?: string;
-  tags?: string[];
-}): { isValid: boolean; error?: string } {
-  // Validate word (only English letters allowed)
-  if (!/^[a-zA-Z\s\-']+$/.test(wordData.word)) {
-    return { isValid: false, error: `Word "${wordData.word}" must contain only English letters, spaces, hyphens, or apostrophes` };
-  }
-
-  // Validate definition (English text only)
-  if (!isEnglishText(wordData.definition)) {
-    return { isValid: false, error: `Definition for "${wordData.word}" must be in English` };
-  }
-
-  // Validate example if provided
-  if (wordData.example && !isEnglishText(wordData.example)) {
-    return { isValid: false, error: `Example for "${wordData.word}" must be in English` };
-  }
-
-  // Validate notes if provided
-  if (wordData.notes && !isEnglishText(wordData.notes)) {
-    return { isValid: false, error: `Notes for "${wordData.word}" must be in English` };
-  }
-
-  // Validate tags if provided
-  if (wordData.tags) {
-    for (const tag of wordData.tags) {
-      if (!/^[a-zA-Z0-9\-_]+$/.test(tag)) {
-        return { isValid: false, error: `Tag "${tag}" for word "${wordData.word}" must contain only English letters, numbers, hyphens, or underscores` };
-      }
-    }
-  }
-
-  return { isValid: true };
-}
 
 // Register tools
 server.tool(
@@ -411,64 +58,24 @@ server.tool(
     try {
       const wordCount = words.length;
       const isSingleWord = wordCount === 1;
-      await log('INFO', isSingleWord ? `Adding word: ${words[0].word}` : `Starting batch addition of ${wordCount} words`);
-      await ensureDirectories();
+      await log('INFO', isSingleWord ? `添加单词: ${words[0].word}` : `开始批量添加 ${wordCount} 个单词`);
 
-      // Validate all words first
-      for (const wordData of words) {
-        const validation = validateWordData(wordData);
-        if (!validation.isValid) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Validation Error: ${validation.error}`,
-              },
-            ],
-          };
-        }
-      }
+      const results = await vocabularyService.addWords(words);
 
-      // Read existing vocabulary
-      let existingWords = await readCsvFile(VOCAB_FILE) as any[];
-      const results = {
-        success: [] as any[],
-        failed: [] as { word: string; error: string }[],
-      };
-
-      // Process each word
-      for (const wordData of words) {
-        try {
-          const processedWord = await processWord(wordData);
-          results.success.push(processedWord);
-          existingWords.push(processedWord);
-        } catch (error: any) {
-          results.failed.push({
-            word: wordData.word,
-            error: error.message,
-          });
-        }
-      }
-
-      // Update vocabulary file
-      if (results.success.length > 0) {
-        await writeCsvFile(VOCAB_FILE, existingWords);
-      }
-
-      // Prepare response message
+      // 准备响应消息
       let responseMessage = '';
       if (isSingleWord) {
         if (results.success.length === 1) {
-          responseMessage = `✅ Successfully added word: "${words[0].word}"`;
+          responseMessage = `✅ 成功添加单词: "${words[0].word}"`;
         } else {
-          responseMessage = `❌ Failed to add word "${words[0].word}": ${results.failed[0].error}`;
+          responseMessage = `❌ 添加单词 "${words[0].word}" 失败: ${results.failed[0].error}`;
         }
       } else {
-        responseMessage = `Batch addition completed:\n`;
-        responseMessage += `✅ Successfully added: ${results.success.length} words\n`;
+        responseMessage = `批量添加完成:\n`;
+        responseMessage += `✅ 成功添加: ${results.success.length} 个单词\n`;
         if (results.failed.length > 0) {
-          responseMessage += `❌ Failed: ${results.failed.length} words\n\n`;
-          responseMessage += `Failure details:\n`;
+          responseMessage += `❌ 失败: ${results.failed.length} 个单词\n\n`;
+          responseMessage += `失败详情:\n`;
           results.failed.forEach(({ word, error }) => {
             responseMessage += `- ${word}: ${error}\n`;
           });
@@ -485,8 +92,8 @@ server.tool(
       };
     } catch (error: any) {
       const errorMessage = words.length === 1 
-        ? `Error adding word "${words[0].word}": ${error.message}`
-        : `Error in batch addition: ${error.message}`;
+        ? `添加单词 "${words[0].word}" 时出错: ${error.message}`
+        : `批量添加单词时出错: ${error.message}`;
       
       await log('ERROR', errorMessage, error);
       return {
@@ -535,50 +142,46 @@ server.tool(
       "added",
       "lapses"
     ]).optional().describe("Sorting method to use"),
-    limit: z.number().min(1).max(100).optional().describe("Maximum number of words to return (1-100, default: 20)"),
+    limit: z.number().min(1).max(100).optional().describe("Maximum number of results to return (1-100, default: 20)"),
   },
   async ({ sortBy = "recent", limit = 20 }) => {
     const startTime = Date.now();
-    await log('INFO', `List words request received`, { sortBy, limit });
+    await log('INFO', `列出单词请求已收到`, { sortBy, limit });
 
     try {
       // 获取指定牌组中的所有卡片
-      await log('DEBUG', `Fetching cards from deck: ${ANKI_DECK_NAME}`);
-      const cardIds = await invokeAnkiConnect("findCards", {
-        query: `deck:${ANKI_DECK_NAME}`
-      });
+      await log('DEBUG', `从牌组获取卡片: ${process.env.ANKI_DECK_NAME}`);
+      const cardIds = await ankiService.findCards("");
 
-      await log('DEBUG', `Found ${cardIds.length} cards in deck`);
+      await log('DEBUG', `找到 ${cardIds.length} 张卡片`);
 
       if (cardIds.length === 0) {
-        await log('INFO', 'No cards found in deck');
+        await log('INFO', '未找到卡片');
         return {
           content: [
             {
               type: "text",
-              text: "No cards found in the deck. Please add some words first.",
+              text: "牌组中没有卡片。请先添加一些单词。",
             },
           ],
         };
       }
 
       // 获取卡片详细信息
-      await log('DEBUG', `Fetching detailed information for ${cardIds.length} cards`);
-      const cardsInfo = await invokeAnkiConnect("cardsInfo", {
-        cards: cardIds
-      });
+      await log('DEBUG', `获取 ${cardIds.length} 张卡片的详细信息`);
+      const cardsInfo = await ankiService.getCardsInfo(cardIds);
 
       // 根据排序方式处理卡片
-      await log('DEBUG', `Sorting cards by: ${sortBy}`);
+      await log('DEBUG', `按 ${sortBy} 排序卡片`);
       let sortedCards = [...cardsInfo];
       switch (sortBy) {
         case "due":
           sortedCards.sort((a, b) => a.interval - b.interval);
-          await log('DEBUG', 'Cards sorted by interval (ascending)');
+          await log('DEBUG', '按间隔排序（升序）');
           break;
         case "recent":
           sortedCards.sort((a, b) => b.reps - a.reps);
-          await log('DEBUG', 'Cards sorted by review count (descending)');
+          await log('DEBUG', '按复习次数排序（降序）');
           break;
         case "difficulty":
           sortedCards.sort((a, b) => {
@@ -586,21 +189,21 @@ server.tool(
             const accuracyB = b.reps > 0 ? (b.reps - b.lapses) / b.reps : 0;
             return accuracyA - accuracyB;
           });
-          await log('DEBUG', 'Cards sorted by accuracy rate (ascending)');
+          await log('DEBUG', '按正确率排序（升序）');
           break;
         case "added":
           sortedCards.sort((a, b) => b.id - a.id);
-          await log('DEBUG', 'Cards sorted by card ID (descending)');
+          await log('DEBUG', '按卡片 ID 排序（降序）');
           break;
         case "lapses":
           sortedCards.sort((a, b) => b.lapses - a.lapses);
-          await log('DEBUG', 'Cards sorted by lapse count (descending)');
+          await log('DEBUG', '按遗忘次数排序（降序）');
           break;
       }
 
       // 限制返回数量
       sortedCards = sortedCards.slice(0, limit);
-      await log('DEBUG', `Limited result to ${sortedCards.length} cards`);
+      await log('DEBUG', `限制结果为 ${sortedCards.length} 张卡片`);
 
       // 记录一些统计信息
       const stats = {
@@ -610,159 +213,13 @@ server.tool(
         averageLapses: sortedCards.reduce((sum, card) => sum + card.lapses, 0) / sortedCards.length,
         averageInterval: sortedCards.reduce((sum, card) => sum + card.interval, 0) / sortedCards.length,
       };
-      await log('INFO', 'Card statistics', stats);
+      await log('INFO', '卡片统计信息', stats);
 
       // 格式化输出
-      await log('DEBUG', 'Fetching note information for formatted output');
+      await log('DEBUG', '获取笔记信息以格式化输出');
       const formattedCards = await Promise.all(sortedCards.map(async (card) => {
-        const noteInfo = await invokeAnkiConnect("notesInfo", {
-          notes: [card.note]
-        });
+        const noteInfo = await ankiService.getNotesInfo([card.note]);
         const note = noteInfo[0];
-        const accuracy = card.reps > 0 ? ((card.reps - card.lapses) / card.reps * 100).toFixed(1) : "N/A";
-        
-        return `Word: ${note.fields.Word.value}\n` +
-          `Definition: ${note.fields.Definition.value}\n` +
-          `${note.fields.Example?.value ? `Example: ${note.fields.Example.value}\n` : ""}` +
-          `Stats:\n` +
-          `- Reviews: ${card.reps}\n` +
-          `- Lapses: ${card.lapses}\n` +
-          `- Accuracy: ${accuracy}%\n` +
-          `- Familiarity: ${formatInterval(card.interval)}\n` +
-          `- Next Review: ${new Date(card.due * 1000).toLocaleDateString()}\n` +
-          "---";
-      }));
-
-      const summary = `Showing ${sortedCards.length} words (sorted by: ${sortBy})\n\n`;
-
-      const executionTime = Date.now() - startTime;
-      await log('INFO', `List words request completed`, { 
-        executionTime: `${executionTime}ms`,
-        cardsReturned: sortedCards.length,
-        sortBy,
-        limit
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: summary + (formattedCards.join("\n") || "No matching words found."),
-          },
-        ],
-      };
-    } catch (error: any) {
-      const executionTime = Date.now() - startTime;
-      await log('ERROR', `Failed to list words: ${error.message}`, error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error listing words: ${error.message}`,
-          },
-        ],
-      };
-    }
-  },
-);
-
-// 辅助函数：格式化时间间隔
-function formatInterval(interval: number): string {
-  if (interval === 0) return "新卡片";
-  if (interval < 24) return `${interval}小时`;
-  const days = Math.floor(interval / 24);
-  if (days < 30) return `${days}天`;
-  const months = Math.floor(days / 30);
-  return `${months}个月`;
-}
-
-server.tool(
-  "search-words",
-  "Search words and definitions in Anki deck",
-  {
-    query: z.string().describe("Search query (word or definition)"),
-    limit: z.number().min(1).max(50).optional().describe("Maximum number of results to return (1-50, default: 20)"),
-  },
-  async ({ query, limit = 20 }) => {
-    const startTime = Date.now();
-    await log('INFO', `Search request received`, { query, limit });
-
-    try {
-      // Search for matching cards using AnkiConnect
-      await log('DEBUG', `Searching in deck ${ANKI_DECK_NAME}: ${query}`);
-      const cardIds = await invokeAnkiConnect("findCards", {
-        query: `deck:${ANKI_DECK_NAME} ("Word:*${query}*" OR "Definition:*${query}*")`
-      });
-
-      await log('DEBUG', `Found ${cardIds.length} matching cards`);
-
-      if (cardIds.length === 0) {
-        await log('INFO', 'No matching cards found');
-        return {
-          content: [
-            {
-              type: "text",
-              text: `未找到包含 "${query}" 的单词。`,
-            },
-          ],
-        };
-      }
-
-      // Get card information
-      await log('DEBUG', `Fetching details for ${cardIds.length} cards`);
-      const cardsInfo: Array<{
-        note: number;
-        reps: number;
-        lapses: number;
-        interval: number;
-        due: number;
-      }> = await invokeAnkiConnect("cardsInfo", {
-        cards: cardIds
-      });
-
-      // Get note information
-      const noteIds = [...new Set(cardsInfo.map(card => card.note))];
-      const notesInfo: Array<{
-        noteId: number;
-        fields: {
-          Word: { value: string };
-          Definition: { value: string };
-          Example?: { value: string };
-        };
-        tags: string[];
-      }> = await invokeAnkiConnect("notesInfo", {
-        notes: noteIds
-      });
-
-      // Calculate relevance scores and sort results
-      const scoredNotes = notesInfo.map(note => {
-        const card = cardsInfo.find(c => c.note === note.noteId);
-        if (!card) return null;
-
-        // Calculate relevance score
-        const word = note.fields.Word.value.toLowerCase();
-        const definition = note.fields.Definition.value.toLowerCase();
-        const searchQuery = query.toLowerCase();
-        
-        let score = 0;
-        // Exact word match (highest priority)
-        if (word === searchQuery) score += 100;
-        // Word starts with query
-        else if (word.startsWith(searchQuery)) score += 80;
-        // Word contains query
-        else if (word.includes(searchQuery)) score += 60;
-        // Complete word match in definition
-        else if (definition.split(/\s+/).some(w => w === searchQuery)) score += 40;
-        // Definition contains query
-        else if (definition.includes(searchQuery)) score += 20;
-
-        return { note, card, score };
-      }).filter((item): item is NonNullable<typeof item> => item !== null)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit);
-
-      // Format output
-      const formattedNotes = scoredNotes.map(({ note, card }) => {
         const accuracy = card.reps > 0 ? ((card.reps - card.lapses) / card.reps * 100).toFixed(1) : "N/A";
         
         return `单词: ${note.fields.Word.value}\n` +
@@ -774,33 +231,150 @@ server.tool(
                `- 正确率: ${accuracy}%\n` +
                `- 熟悉度: ${formatInterval(card.interval)}\n` +
                `- 下次复习: ${new Date(card.due * 1000).toLocaleDateString()}\n` +
-               `${note.tags.length > 0 ? `标签: ${note.tags.join(", ")}\n` : ""}` +
                "---";
-      }).join("\n");
+      }));
 
-      const totalMatches = notesInfo.length;
-      const summary = `找到 ${totalMatches} 个匹配的单词${totalMatches > limit ? `（显示前 ${limit} 个最相关结果）` : ""}:\n\n`;
+      const summary = `显示 ${sortedCards.length} 个单词（按 ${sortBy} 排序）\n\n`;
 
       const executionTime = Date.now() - startTime;
-      await log('INFO', `Search completed successfully`, {
+      await log('INFO', `列出单词请求完成`, { 
         executionTime: `${executionTime}ms`,
-        totalMatches,
-        displayedResults: scoredNotes.length,
-        query,
-        relevanceOrder: scoredNotes.map(n => n.note.fields.Word.value).join(', ')
+        cardsReturned: sortedCards.length,
+        sortBy,
+        limit
       });
 
       return {
         content: [
           {
             type: "text",
-            text: summary + formattedNotes,
+            text: summary + formattedCards.join("\n"),
           },
         ],
       };
     } catch (error: any) {
       const executionTime = Date.now() - startTime;
-      await log('ERROR', `Search operation failed`, {
+      await log('ERROR', `列出单词失败`, {
+        error: error.message,
+        sortBy,
+        limit,
+        executionTime: `${executionTime}ms`
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `列出单词时出错: ${error.message}`,
+          },
+        ],
+      };
+    }
+  },
+);
+
+server.tool(
+  "search-words",
+  "Search words and definitions in Anki deck",
+  {
+    query: z.string().describe("Search query (word or definition)"),
+    limit: z.number().min(1).max(50).optional().describe("Maximum number of results to return (1-50, default: 20)"),
+  },
+  async ({ query, limit = 20 }) => {
+    const startTime = Date.now();
+    await log('INFO', `搜索请求已收到`, { query, limit });
+
+    try {
+      // 搜索单词
+      const words = await vocabularyService.searchWords(query);
+      
+      if (words.length === 0) {
+        await log('INFO', '未找到匹配的单词');
+        return {
+          content: [
+            {
+              type: "text",
+              text: `未找到包含 "${query}" 的单词。`,
+            },
+          ],
+        };
+      }
+
+      // 获取 Anki 卡片信息
+      const cardIds = await ankiService.findCards(
+        `("Word:*${query}*" OR "Definition:*${query}*")`
+      );
+      const cardsInfo = await ankiService.getCardsInfo(cardIds);
+      const notesInfo = await ankiService.getNotesInfo(cardsInfo.map(card => card.note));
+
+      // 计算相关性分数并排序结果
+      const scoredWords = words.map(word => {
+        const card = cardsInfo.find(c => {
+          const note = notesInfo.find(n => n.noteId === c.note);
+          return note && note.fields.Word.value.toLowerCase() === word.word.toLowerCase();
+        });
+
+        if (!card) return null;
+
+        // 计算相关性分数
+        const searchQuery = query.toLowerCase();
+        let score = 0;
+        
+        // 完全匹配（最高优先级）
+        if (word.word.toLowerCase() === searchQuery) score += 100;
+        // 单词以查询开头
+        else if (word.word.toLowerCase().startsWith(searchQuery)) score += 80;
+        // 单词包含查询
+        else if (word.word.toLowerCase().includes(searchQuery)) score += 60;
+        // 定义中的完整单词匹配
+        else if (word.definition.toLowerCase().split(/\s+/).some(w => w === searchQuery)) score += 40;
+        // 定义包含查询
+        else if (word.definition.toLowerCase().includes(searchQuery)) score += 20;
+
+        return { word, card, score };
+      }).filter((item): item is NonNullable<typeof item> => item !== null)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      // 格式化输出
+      const formattedWords = scoredWords.map(({ word, card }) => {
+        const accuracy = card.reps > 0 ? ((card.reps - card.lapses) / card.reps * 100).toFixed(1) : "N/A";
+        
+        return `单词: ${word.word}\n` +
+               `定义: ${word.definition}\n` +
+               `${word.example ? `例句: ${word.example}\n` : ""}` +
+               `统计:\n` +
+               `- 复习次数: ${card.reps}\n` +
+               `- 遗忘次数: ${card.lapses}\n` +
+               `- 正确率: ${accuracy}%\n` +
+               `- 熟悉度: ${formatInterval(card.interval)}\n` +
+               `- 下次复习: ${new Date(card.due * 1000).toLocaleDateString()}\n` +
+               `${word.tags?.length ? `标签: ${word.tags.join(", ")}\n` : ""}` +
+               "---";
+      }).join("\n");
+
+      const totalMatches = words.length;
+      const summary = `找到 ${totalMatches} 个匹配的单词${totalMatches > limit ? `（显示前 ${limit} 个最相关结果）` : ""}:\n\n`;
+
+      const executionTime = Date.now() - startTime;
+      await log('INFO', `搜索完成`, {
+        executionTime: `${executionTime}ms`,
+        totalMatches,
+        displayedResults: scoredWords.length,
+        query,
+        relevanceOrder: scoredWords.map(n => n.word.word).join(', ')
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: summary + formattedWords,
+          },
+        ],
+      };
+    } catch (error: any) {
+      const executionTime = Date.now() - startTime;
+      await log('ERROR', `搜索操作失败`, {
         error: error.message,
         query,
         executionTime: `${executionTime}ms`
@@ -817,15 +391,35 @@ server.tool(
   },
 );
 
-// Main function to run the server
-async function main() {
-  await log('INFO', 'Starting Anki MCP Server...');
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  await log('INFO', 'Anki MCP Server running on stdio');
+// 优雅关闭处理
+async function handleShutdown() {
+  await log('INFO', '关闭 Anki MCP 服务器...');
+  try {
+    // 清理未使用的音频文件
+    await audioService.cleanupUnusedAudioFiles();
+    await log('INFO', '服务器关闭完成');
+    process.exit(0);
+  } catch (error) {
+    await log('ERROR', `关闭过程中出错: ${error}`, error);
+    process.exit(1);
+  }
 }
 
-main().catch(async (error) => {
-  await log('ERROR', `Fatal error in main(): ${error}`);
-  process.exit(1);
-}); 
+// Main function to run the server
+async function main() {
+  await log('INFO', '启动 Anki MCP 服务器...');
+  try {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    await log('INFO', 'Anki MCP 服务器在 stdio 上运行');
+  
+    // 设置优雅关闭
+    process.on('SIGTERM', handleShutdown);
+    process.on('SIGINT', handleShutdown);
+  } catch (error) {
+    await log('ERROR', `服务器初始化错误: ${error}`, error);
+    process.exit(1);
+  }
+}
+
+main(); 
